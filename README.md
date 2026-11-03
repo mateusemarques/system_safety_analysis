@@ -4,6 +4,7 @@ Open scripts for aircraft system safety assessment (ARP4754A/B, ARP4761/A): deve
 
 | Folder | Content |
 |---|---|
+| `dal_allocation/coallocation_ch701` | v0 prototype: architecture, independence, DAL and mass co-allocation for a light electric aircraft FBW |
 | `dal_allocation/wbs_delmas2023` | Reproduction of the cost-optimal DAL allocation of the Wheel Brake System (Delmas et al., DASC 2023) |
 
 Requirements: Python 3.10+, `pip install -r requirements.txt`.
