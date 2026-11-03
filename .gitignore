@@ -2,3 +2,6 @@ data/
 __pycache__/
 *.pyc
 results.csv
+resultados.csv
+dimensionamento_ema.json
+__pycache__/

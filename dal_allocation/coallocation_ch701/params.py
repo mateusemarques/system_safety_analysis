@@ -9,17 +9,27 @@ RATE = {
     'ACE':   47.5e-6,   # controlador do motor do EMA ~ "controlador de motor", NASA/CR-2019-220217
     'MOT':   92.4e-6,   # motor elétrico do EMA, NASA/CR-2019-220217
     'FCC':   47.5e-6,   # PLACEHOLDER: computador de voo igualado ao controlador de motor
-    'MECH':  1e-6,      # PLACEHOLDER: falha (emperramento/desconexão) do comando mecânico remanescente
-    'CLUTCH': 10e-6,    # PLACEHOLDER: embreagem não abre quando comandada (conceito TUM)
+    'MECH':  7.44e-6,   # NASA/CR-2001-210647 Tab. 19: sistema longitudinal de GA a cabo, taxa de risco em t = 6 h (limite inferior; 1/média = 2,4e-4)
+    'CLUTCH': 2.77e-6,  # NSWC-11 (2011): solenoide, 2,77/1e6 operações; 1 demanda por hora de voo (ASSUMIDO)
 }
-RHO_ERR = 0.1   # PLACEHOLDER: fração das falhas de FCC/ACE que é comando errôneo (não detectado na fonte)
+RHO_RAW = 0.438 # fração BRUTA das falhas de FCC/ACE que é comando errôneo: FMD-2016, exemplo 'Actuator' genérico (fraco)
+# --- Cobertura do monitor por canal: VARIÁVEL DE PROJETO (etapa 3, 03/11/2026) ---
+# taxa errônea não detectada = lambda * RHO_RAW * (1 - c)
+# mass: kg por canal; mon_rate: taxa do hardware de monitor (falso disparo/falha => passivação = perda do canal)
+# dev_indep: o monitor é dissimilar e entra como item independente nos FFS de erro de desenvolvimento do runaway
+COVERAGE = {
+    'c90':  dict(c=0.90,  mass=0.00, mon_rate=0.0,   dev_indep=False),  # BIT/watchdog/razoabilidade no próprio FCC
+    'c99':  dict(c=0.99,  mass=0.10, mon_rate=10e-6, dev_indep=False),  # ASSUMIDO: sensor de posição da superfície + monitor no ACE
+    'c999': dict(c=0.999, mass=0.20, mon_rate=15e-6, dev_indep=True),   # ASSUMIDO: + monitor dissimilar com envelope de autoridade
+}
 RHO_JAM = 0.1   # PLACEHOLDER: fração das falhas do motor do EMA que é emperramento
 
 # --- Massas (kg) ---
 MASS = {
     'FCC_LANE': 0.4,    # PLACEHOLDER por pista (COM ou MON)
-    'EMA': 1.5,         # PLACEHOLDER motor + redutor + ACE
-    'BAT_DED': 1.0,     # PLACEHOLDER bateria dedicada por canal
+    'EMA': 2.23,        # etapa 3: canal que move a superfície toda, ~10 N·m no servo (extrapolado da escala Dynon SV52)
+    'EMA_A1': 0.635,    # etapa 3: Garmin GSA 28 (60 in-lb, 0,635 kg) basta para 20% da superfície (~2 N·m)
+    'BAT_DED': 0.27,    # etapa 3: ~15 Wh (10 W típ. x 1,5 h) a 90 Wh/kg + 0,1 kg (premissas em etapa3/dimensionamento_ema.py)
     'DCDC': 0.3,        # PLACEHOLDER conversor por canal a partir da bateria de propulsão
     'HARNESS': 0.4,     # PLACEHOLDER chicote por canal
     'MECH': 6.7,        # comandos mecânicos a substituir (build-up do CH 701, projeto paralelo)

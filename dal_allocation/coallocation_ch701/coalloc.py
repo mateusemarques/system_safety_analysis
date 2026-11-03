@@ -23,17 +23,22 @@ def minimize(s):
     return set(keep)
 
 # ---------- geração de cortes por projeto ----------
-def design_space():
-    yield dict(arch='A1', n=1, energy='common', sw='common')
-    yield dict(arch='A1', n=1, energy='dedicated', sw='common')
-    for arch, n in (('A2', 2), ('A3', 3)):
-        for energy in ('common', 'dedicated'):
-            for sw in ('common', 'dissimilar'):
-                yield dict(arch=arch, n=n, energy=energy, sw=sw)
+def design_space(covs=None):
+    covs = covs or list(P.COVERAGE)
+    for cov in covs:
+        yield dict(arch='A1', n=1, energy='common', sw='common', cov=cov)
+        yield dict(arch='A1', n=1, energy='dedicated', sw='common', cov=cov)
+        for arch, n in (('A2', 2), ('A3', 3)):
+            for energy in ('common', 'dedicated'):
+                for sw in ('common', 'dissimilar'):
+                    yield dict(arch=arch, n=n, energy=energy, sw=sw, cov=cov)
+
+_COV = {'c': 0.9}
 
 def build(d):
     """Retorna {FC: (severidade, cortes_hw, cortes_dev)}, massa, itens (com tipo HW/SW) e grupos 'similares'."""
     n, a = d['n'], d['arch']
+    cv = P.COVERAGE[d.get('cov', 'c90')]
     lanes = ['COM', 'MON'] if a == 'A2' else ['COM']
     # potência
     if d['energy'] == 'common':
@@ -44,10 +49,12 @@ def build(d):
     def sw(c, lane):
         return ev(f'SW_{lane}') if d['sw'] == 'common' else ev(f'SW_{lane}_{c}')
     ch = range(1, n + 1)
-    loss_hw = lambda c: OR(*[ev(f'FCC_{l}_{c}') for l in lanes], ev(f'ACE_{c}'), ev(f'MOT_{c}'), pwr_hw(c))
+    mon_hw = (lambda c: [ev(f'MONHW_{c}')]) if cv['mon_rate'] > 0 else (lambda c: [])
+    loss_hw = lambda c: OR(*[ev(f'FCC_{l}_{c}') for l in lanes], ev(f'ACE_{c}'), ev(f'MOT_{c}'), pwr_hw(c), *mon_hw(c))
     loss_dev = lambda c: OR(*[sw(c, l) for l in lanes], *[ev(f'FCCHW_{l}_{c}') for l in lanes], ev(f'ACEHW_{c}'))
     err_hw_src = lambda c: OR(ev(f'FCCe_COM_{c}'), ev(f'ACEe_{c}'))
-    err_dev_src = lambda c: OR(sw(c, 'COM'), ev(f'FCCHW_COM_{c}'), ev(f'ACEHW_{c}'))
+    _src = lambda c: OR(sw(c, 'COM'), ev(f'FCCHW_COM_{c}'), ev(f'ACEHW_{c}'))
+    err_dev_src = (lambda c: AND(_src(c), ev(f'MONHW_{c}'))) if cv['dev_indep'] else _src
     fc = {}
     if a == 'A1':
         fc['Loss'] = ('CAT',
@@ -62,8 +69,10 @@ def build(d):
         fc['Loss'] = ('CAT', AND(*[loss_hw(c) for c in ch]), AND(*[loss_dev(c) for c in ch]))
         fc['Runaway'] = ('CAT', KofN(2, [err_hw_src(c) for c in ch]), KofN(2, [err_dev_src(c) for c in ch]))
     # massa
-    m = n * (len(lanes) * P.MASS['FCC_LANE'] + P.MASS['EMA'] + P.MASS['HARNESS'])
+    ema = P.MASS.get('EMA_' + a, P.MASS['EMA'])
+    m = n * (len(lanes) * P.MASS['FCC_LANE'] + ema + P.MASS['HARNESS'])
     m += n * (P.MASS['DCDC'] if d['energy'] == 'common' else P.MASS['BAT_DED'])
+    m += n * cv['mass']
     m += (P.MASS['MECH'] + P.MASS['CLUTCH']) if a == 'A1' else 0.0
     dm = m - P.MASS['MECH']
     return fc, dm
@@ -71,8 +80,9 @@ def build(d):
 def rate(e):
     base = e.split('_')[0]
     if base == 'BAT': return P.RATE['BAT']
-    if base == 'FCCe': return P.RATE['FCC'] * P.RHO_ERR
-    if base == 'ACEe': return P.RATE['ACE'] * P.RHO_ERR
+    if base == 'FCCe': return P.RATE['FCC'] * P.RHO_RAW * (1 - _COV['c'])
+    if base == 'ACEe': return P.RATE['ACE'] * P.RHO_RAW * (1 - _COV['c'])
+    if base == 'MONHW': return _COV['mon_rate']
     if base == 'MOTjam': return P.RATE['MOT'] * P.RHO_JAM
     return P.RATE[base]
 
@@ -84,7 +94,7 @@ def item_of(e):  # SW_COM_1 -> SW_COM_1 ; FCCHW_COM_2 -> FCCHW_COM_2
     return e
 def similar_key(i):  # itens replicados (mesmo projeto) recebem o mesmo DAL, como no WBS
     p = i.split('_')
-    return '_'.join(p[:-1]) if p[0] in ('FCCHW', 'ACEHW') else i
+    return '_'.join(p[:-1]) if p[0] in ('FCCHW', 'ACEHW', 'MONHW') else i
 
 def allocate(dev_ffs, regime):
     """dev_ffs: lista (ffs, sev). Retorna (custo, {item: DAL}) mínimo pelas regras do regime."""
@@ -116,8 +126,9 @@ def allocate(dev_ffs, regime):
 
 # ---------- avaliação ----------
 def evaluate(d, regime):
-    R = P.REGIMES[regime]; fc, dm = build(d)
-    out = dict(design=f"{d['arch']}-{d['energy']}-{d['sw']}" if d['arch'] != 'A1' else f"A1-{d['energy']}",
+    R = P.REGIMES[regime]; cov = d.get('cov', 'c90'); _COV.update(P.COVERAGE[cov]); fc, dm = build(d)
+    nm = f"{d['arch']}-{d['energy']}-{d['sw']}" if d['arch'] != 'A1' else f"A1-{d['energy']}"
+    out = dict(design=f"{nm}-{cov}",
                regime=regime, dmass_kg=round(dm, 2), dendur_min=round(P.MIN_PER_KG * dm, 1))
     ok = True; dev = []
     for name, (sev, hw, dv) in fc.items():
@@ -143,7 +154,7 @@ if __name__ == '__main__':
     rows = [evaluate(d, reg) for reg in P.REGIMES for d in design_space()]
     keys = ['regime', 'design', 'feasible', 'dal_cost', 'dmass_kg', 'dendur_min', 'P_Loss', 'ord_Loss',
             'single_Loss', 'P_Runaway', 'ord_Runaway', 'dal']
-    w = csv.DictWriter(open('results.csv', 'w'), fieldnames=keys, extrasaction='ignore'); w.writeheader(); w.writerows(rows)
+    w = csv.DictWriter(open('resultados.csv', 'w'), fieldnames=keys, extrasaction='ignore'); w.writeheader(); w.writerows(rows)
     for reg in P.REGIMES:
         print(f'\n=== {reg} ===')
         rr = [r for r in rows if r['regime'] == reg]
